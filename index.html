@@ -1,0 +1,118 @@
+
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Tứ Sắc Online</title>
+<style>
+*{box-sizing:border-box}body{margin:0;font-family:system-ui,Arial;background:#123b2a;color:#fff;min-height:100vh}
+.wrap{max-width:900px;margin:auto;padding:14px}.panel{background:#174c37;border:1px solid #2e7458;border-radius:18px;padding:16px;box-shadow:0 8px 25px #0004}
+h1{text-align:center;margin:6px 0 16px;font-size:28px}.row{display:flex;gap:8px;flex-wrap:wrap}
+input,button{font:inherit;border-radius:12px;border:0;padding:12px}input{flex:1;min-width:140px;background:#fff;color:#222}
+button{background:#e8c45a;color:#171717;font-weight:700;cursor:pointer}button.secondary{background:#d8eee5}button:disabled{opacity:.45}
+#game{display:none}.players{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;margin-bottom:12px}
+.player{background:#0e2f22;padding:9px;border-radius:12px;text-align:center;font-size:13px}.turn{outline:3px solid #f6d35e}
+.table{background:#0b2b20;border-radius:18px;padding:14px;min-height:160px;text-align:center}
+.discard{font-size:13px;margin:8px}.card{width:58px;height:84px;border-radius:9px;border:2px solid #222;background:#fff;color:#111;display:inline-flex;flex-direction:column;justify-content:center;align-items:center;margin:4px;font-weight:800;box-shadow:0 3px 7px #0006;touch-action:manipulation}
+.card .sym{font-size:25px}.red{color:#c62828}.yellow{color:#b07b00}.green{color:#13833b}.blue{color:#2365b0}
+.hand{display:flex;flex-wrap:wrap;justify-content:center;padding:8px 0}.hint{text-align:center;min-height:24px;color:#ffeaa0}.small{font-size:12px;opacity:.8}
+@media(max-width:600px){.players{grid-template-columns:repeat(2,1fr)}.card{width:52px;height:76px;margin:3px}.card .sym{font-size:22px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div id="lobby" class="panel">
+    <h1>🀄 Tứ Sắc Online</h1>
+    <p>Chơi thử 2–4 người qua Internet. Bản này là bản demo luật cơ bản.</p>
+    <input id="name" maxlength="16" placeholder="Tên của bạn">
+    <div class="row" style="margin-top:8px">
+      <button onclick="createRoom()">Tạo phòng</button>
+      <input id="code" maxlength="5" placeholder="Mã phòng">
+      <button class="secondary" onclick="joinRoom()">Vào phòng</button>
+    </div>
+    <p id="err" class="hint"></p>
+  </div>
+
+  <div id="game">
+    <div class="panel">
+      <h1>🀄 Tứ Sắc <span id="roomCode"></span></h1>
+      <div class="players" id="players"></div>
+      <div class="row">
+        <button id="readyBtn" onclick="ready()">Sẵn sàng</button>
+        <button id="newBtn" onclick="newRound()" style="display:none">Ván mới</button>
+        <button class="secondary" onclick="leave()">Rời phòng</button>
+      </div>
+      <div class="hint" id="message"></div>
+    </div>
+
+    <div class="panel table" style="margin-top:12px">
+      <div class="small">Bài còn lại: <span id="deckInfo">?</span></div>
+      <div class="discard">Lá đã đánh gần nhất: <span id="discard">Chưa có</span></div>
+      <div id="turnButtons" class="row" style="justify-content:center">
+        <button id="drawBtn" onclick="draw()">Bốc bài</button>
+      </div>
+    </div>
+
+    <div class="panel" style="margin-top:12px">
+      <div style="text-align:center;font-weight:800">Bài của bạn — chạm vào lá để đánh</div>
+      <div id="hand" class="hand"></div>
+    </div>
+  </div>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script>
+const socket=io();
+let me="", state=null, hand=[];
+const symbols={tuong:"♔",si:"♟",tuong_xe:"車",tuong_pha:"炮",tuong_ma:"馬",phao:"炮",tot:"兵"};
+
+function $(id){return document.getElementById(id)}
+function name(){return $("name").value.trim()||"Người chơi"}
+
+function createRoom(){socket.emit("createRoom",{name:name()})}
+function joinRoom(){socket.emit("joinRoom",{name:name(),code:$("code").value.trim().toUpperCase()})}
+function ready(){socket.emit("ready")}
+function draw(){socket.emit("draw")}
+function newRound(){socket.emit("newRound")}
+function leave(){socket.emit("leave"); location.reload()}
+
+socket.on("roomCreated",code=>{
+  $("code").value=code;
+  // Server đã tự thêm người tạo vào phòng; không gửi join lần nữa.
+  $("err").textContent="Đã tạo phòng. Mã phòng: "+code;
+})
+
+socket.on("errorMsg",m=>{$("err").textContent=m; $("message").textContent=m})
+socket.on("state",data=>{state=data.state;hand=data.hand;render()})
+
+function render(){
+  $("lobby").style.display="none"; $("game").style.display="block";
+  $("roomCode").textContent="#"+state.code;
+  $("players").innerHTML=state.players.map(p=>{
+    const cls=p.id===state.turn?"player turn":"player";
+    return `<div class="${cls}"><b>${esc(p.name)}</b><br>${p.ready?"✅ Sẵn sàng":"⏳ Chưa sẵn sàng"}<br>${p.cardCount} lá · ${p.score} điểm</div>`;
+  }).join("");
+  $("message").textContent=state.message||"";
+  $("discard").innerHTML=state.discardTop?cardHTML(state.discardTop,false):"Chưa có";
+  const myTurn=state.turn===socket.id;
+  $("drawBtn").disabled=!myTurn || !!state.winner || !state.started;
+  $("readyBtn").disabled=state.started;
+  $("readyBtn").textContent=state.started?"Đang chơi":"Sẵn sàng";
+  $("newBtn").style.display=state.winner?"inline-block":"none";
+  $("hand").innerHTML=hand.map(c=>cardHTML(c,true)).join("");
+  if(state.winner){
+    $("message").textContent=state.winner==="draw"?"Hòa!":(state.players.find(p=>p.id===state.winner)?.name+" thắng!");
+  }
+}
+
+function cardHTML(c,clickable){
+  return `<button class="card ${c.color}" ${clickable?'onclick="discard(\\''+c.id+'\\')"':''}>
+    <div class="sym">${symbols[c.type]||"◆"}</div><div>${esc(c.label)}</div><div class="small">${esc(c.colorLabel)}</div>
+  </button>`;
+}
+function discard(id){socket.emit("discard",{cardId:id})}
+function esc(s){return String(s).replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m]))}
+</script>
+</body>
+</html>
